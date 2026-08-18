@@ -46,3 +46,5 @@ pharmfig assemble .\runs\Figure1\manifest.yaml --run-illustrator
 ```
 
 The reusable Skill is in `skills/assemble-pharmaceutics-figures/`.
+
+中文完整说明见 [`SKILLS.md`](SKILLS.md)。

@@ -1,0 +1,8 @@
+profile: generic-biomedical
+width_mm: 180
+auto_height: true
+font: Arial
+minimum_font_pt: 7
+label_style: a.
+gap_mm: 3
+margin_mm: 4

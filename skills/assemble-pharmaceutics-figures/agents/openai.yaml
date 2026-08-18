@@ -1,0 +1,4 @@
+interface:
+  display_name: "药剂学科研组图"
+  short_description: "确认科学逻辑后再进行Illustrator科研拼图"
+  default_prompt: "Use $assemble-pharmaceutics-figures to scan my figure folder, explain the proposed a/b/c panel logic, and wait for my approval before assembling it in Illustrator."

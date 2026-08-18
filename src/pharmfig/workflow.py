@@ -221,34 +221,41 @@ def _classify(name: str) -> tuple[str, str, str, int]:
     return "待确认", "文件名和本地特征不足，需用户说明", "低", 99
 
 
-def _panel_fingerprint(panel: dict[str, Any]) -> dict[str, Any]:
-    source = Path(panel["source"])
-    current = {"exists": source.exists(), "size": None, "mtime_ns": None, "sha256": None}
-    if source.exists():
-        stat = source.stat()
-        current.update(size=stat.st_size, mtime_ns=stat.st_mtime_ns, sha256=_sha256(source))
-    return {
-        "id": panel["id"],
-        "label": panel["label"],
-        "source": str(source.resolve()),
-        "content_guess": panel.get("content_guess"),
-        "reason": panel.get("reason"),
-        "caption_facts": panel.get("caption_facts", {}),
-        "group": panel.get("group"),
-        "layer_override": panel.get("layer_override"),
-        "content_bounds": panel.get("content_bounds"),
-        "current_source": current,
+def _declared_with_live_sources(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_declared_with_live_sources(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    declared = {
+        key: _declared_with_live_sources(item)
+        for key, item in value.items()
+        if key not in {"source_fingerprint", "cloud_vision_authorized"}
     }
+    source_value = value.get("source")
+    if isinstance(source_value, str):
+        source = Path(source_value)
+        current = {"exists": source.exists(), "size": None, "mtime_ns": None, "sha256": None}
+        if source.exists() and source.is_file():
+            stat = source.stat()
+            current.update(size=stat.st_size, mtime_ns=stat.st_mtime_ns, sha256=_sha256(source))
+        declared["source"] = str(source.resolve())
+        declared["current_source"] = current
+    return declared
+
+
+def _panel_fingerprint(panel: dict[str, Any]) -> dict[str, Any]:
+    # This recursively fingerprints declared child sources and future layout
+    # fields, rather than relying on a schema-specific allow-list.
+    return _declared_with_live_sources(panel)
 
 
 def manifest_hash(manifest: dict[str, Any]) -> str:
     payload = {
-        "run_id": manifest.get("run_id"),
-        "output_folder": manifest.get("output_folder"),
-        "figure": manifest.get("figure", {}),
-        "journal": manifest.get("journal", {}),
-        "panels": [_panel_fingerprint(panel) for panel in manifest.get("panels", [])],
+        key: _declared_with_live_sources(value)
+        for key, value in manifest.items()
+        if key != "approval" and key != "panels"
     }
+    payload["panels"] = [_panel_fingerprint(panel) for panel in manifest.get("panels", [])]
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -404,12 +411,17 @@ def scan_folder(source_folder: str | Path, run_folder: str | Path, run_id: str) 
         "figure": {"number": "Figure X", "core_conclusion": "待用户确认：本Figure的唯一核心结论"},
         "journal": {
             "profile": "generic-biomedical",
-            "width_mm": 180,
-            "auto_height": True,
+            "artboard_width_mm": 210,
+            "artboard_height_mm": 297,
+            "orientation": "portrait",
+            "width_mm": 210,
+            "auto_height": False,
             "font": "Arial",
             "minimum_font_pt": 7,
             "label_style": "a.",
-            "gap_mm": 3,
+            "intra_gap_mm": 2,
+            "inter_gap_mm": 4,
+            "gap_mm": 4,
             "margin_mm": 4,
         },
         "panels": panels,
@@ -674,9 +686,10 @@ def _panel_layer(panel: dict[str, Any]) -> str:
 
 def _layout(manifest: dict[str, Any]) -> tuple[list[dict[str, float]], float]:
     panels = manifest["panels"]
-    width_mm = float(manifest["journal"].get("width_mm", 180))
+    journal = manifest["journal"]
+    width_mm = float(journal.get("artboard_width_mm", journal.get("width_mm", 210)))
     margin = float(manifest["journal"].get("margin_mm", 4))
-    gap = float(manifest["journal"].get("gap_mm", 3))
+    gap = float(journal.get("inter_gap_mm", journal.get("gap_mm", 4)))
     count = max(1, len(panels))
     columns = 1 if count == 1 else 2 if count <= 6 else 3
     rows = math.ceil(count / columns)
@@ -686,7 +699,16 @@ def _layout(manifest: dict[str, Any]) -> tuple[list[dict[str, float]], float]:
     for index, panel in enumerate(panels):
         row, col = divmod(index, columns)
         positions.append({"x": margin + col * (cell_w + gap), "y": margin + row * (cell_h + gap), "w": cell_w, "h": cell_h})
-    height_mm = 2 * margin + rows * cell_h + (rows - 1) * gap
+    required_height_mm = 2 * margin + rows * cell_h + (rows - 1) * gap
+    if journal.get("auto_height", False):
+        height_mm = required_height_mm
+    else:
+        height_mm = float(journal.get("artboard_height_mm", 297))
+        if required_height_mm > height_mm:
+            raise PharmFigError(
+                f"Panels require {required_height_mm:.1f} mm height, exceeding the {height_mm:.1f} mm artboard; "
+                "revise the approved layout or split the figure."
+            )
     return positions, height_mm
 
 
@@ -694,7 +716,7 @@ def _write_jsx(manifest: dict[str, Any], output: Path) -> Path:
     output = _output_folder(manifest)
     positions, height_mm = _layout(manifest)
     journal = manifest["journal"]
-    width_mm = float(journal.get("width_mm", 180))
+    width_mm = float(journal.get("artboard_width_mm", journal.get("width_mm", 210)))
     ai_path = _artifact_path(output, f"{manifest['run_id']}.ai")
     pdf_path = _artifact_path(output, f"{manifest['run_id']}.pdf")
     lines = [
@@ -735,7 +757,8 @@ def _write_jsx(manifest: dict[str, Any], output: Path) -> Path:
 def _write_preview(manifest: dict[str, Any], output: Path) -> Path:
     output = _output_folder(manifest)
     positions, height_mm = _layout(manifest)
-    width_mm = float(manifest["journal"].get("width_mm", 180))
+    journal = manifest["journal"]
+    width_mm = float(journal.get("artboard_width_mm", journal.get("width_mm", 210)))
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width_mm}mm" height="{height_mm}mm" viewBox="0 0 {width_mm} {height_mm}">',
         '<rect width="100%" height="100%" fill="white"/>',

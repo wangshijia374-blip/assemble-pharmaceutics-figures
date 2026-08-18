@@ -54,6 +54,51 @@ def test_scan_adds_draft_manual_content_bounds(tmp_path: Path):
     assert bounds["padding_percent"] == 2
 
 
+def test_skill_requires_hierarchical_spacing_and_preserves_composites():
+    skill = (Path(__file__).parents[1] / "skills" / "assemble-pharmaceutics-figures" / "SKILL.md").read_text(encoding="utf-8")
+    reference = (Path(__file__).parents[1] / "skills" / "assemble-pharmaceutics-figures" / "references" / "journal-layout.md").read_text(encoding="utf-8")
+    assert "intra-group gap" in skill
+    assert "inter-group gap" in skill
+    assert "Do not rearrange the internal grid of an existing composite panel" in skill
+    assert "intra_gap_mm" in reference
+    assert "inter_gap_mm" in reference
+
+
+def test_skill_defaults_all_review_artboards_to_a4_portrait():
+    skill = (Path(__file__).parents[1] / "skills" / "assemble-pharmaceutics-figures" / "SKILL.md").read_text(encoding="utf-8")
+    reference = (Path(__file__).parents[1] / "skills" / "assemble-pharmaceutics-figures" / "references" / "journal-layout.md").read_text(encoding="utf-8")
+    assert "A4 portrait" in skill
+    assert "210 × 297 mm" in skill
+    assert "artboard_width_mm: 210" in reference
+    assert "artboard_height_mm: 297" in reference
+
+
+def test_skill_links_wb_reference_layout_profile():
+    root = Path(__file__).parents[1] / "skills" / "assemble-pharmaceutics-figures"
+    skill = (root / "SKILL.md").read_text(encoding="utf-8")
+    profile = root / "references" / "wb-layout-reference.md"
+    assert "references/wb-layout-reference.md" in skill
+    assert profile.is_file()
+    text = profile.read_text(encoding="utf-8")
+    assert "170 × 200 mm" in text
+    assert "A4 portrait" in text
+    assert "intra-strip" in text
+
+
+def test_skill_links_adaptive_article_layout_profile():
+    root = Path(__file__).parents[1] / "skills" / "assemble-pharmaceutics-figures"
+    skill = (root / "SKILL.md").read_text(encoding="utf-8")
+    profile = root / "references" / "adaptive-article-layout.md"
+    assert "references/adaptive-article-layout.md" in skill
+    assert profile.is_file()
+    text = profile.read_text(encoding="utf-8").lower()
+    assert "semantic span" in text
+    assert "shared row and column headers" in text
+    assert "inset" in text
+    assert "color identity" in text
+    assert "semantic grouping" in text
+
+
 def test_bounds_detect_outer_whitespace_and_write_review(tmp_path: Path):
     source = tmp_path / "source"
     run = tmp_path / "run"
@@ -552,3 +597,118 @@ def test_non_ascii_source_and_run_id_survive_jsx_generation(tmp_path: Path):
     assert jsx_path.name == "图三.jsx"
     assert "显微 图像.png" in jsx
     assert "来源目录" in jsx
+
+
+def test_adaptive_layout_defines_same_attribute_effective_content_size_contract():
+    skill_root = Path(__file__).parents[1] / "skills" / "assemble-pharmaceutics-figures"
+    skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+    profile = (skill_root / "references" / "adaptive-article-layout.md").read_text(encoding="utf-8")
+
+    assert "same_size_group" in skill
+    assert "same_size_group" in profile
+    assert "size_basis" in profile
+    assert "plot_area" in profile
+    assert "target_effective_width_mm" in profile
+    assert "target_effective_height_mm" in profile
+    assert "same scientific or visual type" in profile
+    assert "source canvas" in profile
+
+
+def test_adaptive_layout_prefers_independent_sources_over_raster_composite():
+    skill_root = Path(__file__).parents[1] / "skills" / "assemble-pharmaceutics-figures"
+    skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+    profile = (skill_root / "references" / "adaptive-article-layout.md").read_text(encoding="utf-8")
+
+    assert "independent source files" in skill
+    assert "independent source files" in profile
+    assert "summary raster" in profile
+    assert "traceability" in profile
+
+
+def test_scan_defaults_to_real_a4_portrait_artboard(tmp_path: Path):
+    source = tmp_path / "source"
+    run = tmp_path / "run"
+    source.mkdir()
+    make_image(source / "panel.png")
+
+    manifest = load_manifest(scan_folder(source, run, "a4-demo"))
+
+    assert manifest["journal"]["artboard_width_mm"] == 210
+    assert manifest["journal"]["artboard_height_mm"] == 297
+    assert manifest["journal"]["orientation"] == "portrait"
+    assert manifest["journal"]["intra_gap_mm"] < manifest["journal"]["inter_gap_mm"]
+
+
+def test_layout_metadata_change_revokes_approval(tmp_path: Path):
+    source = tmp_path / "source"
+    run = tmp_path / "run"
+    source.mkdir()
+    make_image(source / "panel.png")
+    manifest_path = scan_folder(source, run, "layout-hash-demo")
+    propose_manifest(manifest_path)
+    detect_content_bounds(manifest_path)
+    approve_content_bounds(manifest_path)
+    approve_manifest(manifest_path)
+    manifest = load_manifest(manifest_path)
+    manifest["panels"][0]["same_size_group"] = "bar-chart-pair"
+    manifest["panels"][0]["size_basis"] = "plot_area"
+    manifest_path.write_text(yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ApprovalError, match="revoked"):
+        assemble_manifest(manifest_path)
+
+
+def test_skill_distinguishes_enforced_and_review_only_capabilities():
+    root = Path(__file__).parents[1] / "skills" / "assemble-pharmaceutics-figures"
+    skill = (root / "SKILL.md").read_text(encoding="utf-8")
+    contract = (root / "references" / "implementation-contract.md").read_text(encoding="utf-8")
+
+    assert "implementation-contract.md" in skill
+    assert "Enforced by the CLI" in contract
+    assert "Review-only until implemented" in contract
+    assert "same_size_group" in contract
+    assert "child content bounds" in contract
+    assert "must not claim" in contract
+
+
+def test_nested_child_source_change_revokes_approval(tmp_path: Path):
+    source = tmp_path / "source"
+    run = tmp_path / "run"
+    source.mkdir()
+    make_image(source / "parent.png")
+    make_image(source / "child.png", color="red")
+    manifest_path = scan_folder(source, run, "child-hash-demo")
+    manifest = load_manifest(manifest_path)
+    manifest["panels"] = [panel for panel in manifest["panels"] if panel["relative_source"] == "parent.png"]
+    manifest["panels"][0]["label"] = "a"
+    manifest["panels"][0]["children"] = [{"id": "a1", "source": str((source / "child.png").resolve())}]
+    manifest_path.write_text(yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    detect_content_bounds(manifest_path)
+    approve_content_bounds(manifest_path)
+    approve_manifest(manifest_path)
+
+    make_image(source / "child.png", color="blue")
+
+    with pytest.raises(ApprovalError, match="revoked"):
+        assemble_manifest(manifest_path)
+
+
+def test_root_layout_metadata_change_revokes_approval(tmp_path: Path):
+    source = tmp_path / "source"
+    run = tmp_path / "run"
+    source.mkdir()
+    make_image(source / "panel.png")
+    manifest_path = scan_folder(source, run, "root-layout-hash-demo")
+    propose_manifest(manifest_path)
+    detect_content_bounds(manifest_path)
+    approve_content_bounds(manifest_path)
+    manifest = load_manifest(manifest_path)
+    manifest["layout_constraints"] = {"reading_order": ["a"]}
+    manifest_path.write_text(yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    approve_manifest(manifest_path)
+    manifest = load_manifest(manifest_path)
+    manifest["layout_constraints"]["reading_order"] = ["b", "a"]
+    manifest_path.write_text(yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ApprovalError, match="revoked"):
+        assemble_manifest(manifest_path)

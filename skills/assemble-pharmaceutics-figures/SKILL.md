@@ -9,6 +9,12 @@ description: Use when arranging pharmaceutics or biomedical research images into
 
 Plan the scientific story before styling. Treat filenames and visual classification as suggestions; require the user to confirm panel meaning and order before Illustrator assembly.
 
+## Core contract
+
+Use four gates: **scan → explain → user approval → assemble**. Source pixels remain read-only. Scientific facts come only from the user-confirmed manifest. Layout is based on approved effective content, never merely the source canvas.
+
+Before promising automation, read `references/implementation-contract.md`. It separates behavior enforced by the CLI from advanced layout rules that remain review-only. The agent must not present a review preview or a clean QA report as proof of final journal compliance.
+
 ## Quick start
 
 From the project root, create an isolated environment and install the package with its test tools:
@@ -53,7 +59,7 @@ Optional integrations are installed separately:
 6. Run interactive `bounds-approve` only after per-panel review and require the literal `APPROVE_BOUNDS` gate. A general instruction such as “按内容大小排版” does not approve individual boundaries.
 7. Run interactive `approve` after bounds approval and require the literal `APPROVE` gate.
 8. Run `assemble`. Approval automatically becomes invalid if files, order, captions, journal settings, or content bounds changed.
-9. Return the editable AI/JSX, preview, bilingual captions, traceability table, and QA report.
+9. For CLI-enforced layouts, return the editable AI/JSX, preview, bilingual captions, traceability table, and screening QA report. For review-only advanced layouts, return a separate preview and unresolved-constraint report; do not claim the generic AI/PDF satisfies those constraints.
 
 ## Commands
 
@@ -85,6 +91,24 @@ Never combine `scan`, `propose`, `bounds`, `bounds-approve`, `approve`, and `ass
 - Automatic alpha or border-color detection is only a candidate. Low-contrast, complex-background, vector, or PDF panels require manual review.
 - `assemble` must fail if any panel lacks approved content bounds, even if the scientific panel order was previously approved.
 
+## Adaptive journal layout contract
+
+- Use an `A4 portrait` artboard (`210 × 297 mm`) for every review layout, Illustrator document, PDF preview, and Figure run by default. Do not switch individual figures to landscape merely to reduce whitespace.
+- Keep the A4 portrait artboard as the stable working canvas across a project. A named journal's final trim/export dimensions may override the export profile, but must not silently change the approved working orientation.
+- Use a hierarchical spacing model: the `intra-group gap` between images belonging to one experimental group must be smaller than the `inter-group gap` between top-level panels. Start from 2 mm and 4 mm, then scale both with the final print size. The generic grid currently enforces only top-level spacing; nested intra-group placement remains review-only.
+- Keep repeated images or charts at comparable visible-content sizes. Match their effective heights or widths; never force identical raster canvases or distort aspect ratios.
+- Put panels or child items of the same scientific or visual type in an explicit `same_size_group`. Compare the approved visible content for images and the approved `plot_area` for statistical plots; never use the source canvas as the equality basis.
+- Record `size_basis`, `target_effective_width_mm`, and/or `target_effective_height_mm` for every `same_size_group`. Preserve aspect ratio. If both target dimensions cannot be met without distortion, use the dimension that controls scientific readability and report the residual mismatch in QA.
+- For an existing raster composite, keep its internal combination unchanged. If child plotting areas cannot be reviewed reliably, match only the composite's approved effective-content dimension and flag that child-level equality remains unresolved.
+- Before treating a raster composite as indivisible, scan for its independent source files. When confirmed independent sources exist, use them as child items, preserve the approved scientific grouping/order, and retain source-to-child traceability; do not use the summary raster merely because it was found first.
+- Do not rearrange the internal grid of an existing composite panel unless the user explicitly approves that internal change. Resize and reposition the composite as one unit.
+- For a newly constructed composite, record its internal grid in the manifest, including row counts, item order, intra-row gap, inter-row gap, and centering rule.
+- Optimize in this order: preserve scientific reading order and requested spatial relations; protect labels, axes, legends, scale bars, and statistics; equalize repeated visual units; reduce unused whitespace; then balance the page.
+- A requested relation such as `B → D → E` is a hard spatial constraint. Do not sacrifice it merely to obtain a symmetric grid.
+- The target journal profile overrides generic A4 presentation. If no journal is named, generate a review layout and separately report the closest common single-column, double-column, and full-page export sizes.
+
+These are decision rules, not a claim that the generic grid engine implements every constraint. For semantic spans, child content bounds, `same_size_group`, hard neighbors, or custom internal grids, follow the review-only workflow in `references/implementation-contract.md` and obtain a fresh approval before any custom Illustrator run.
+
 ## Scientific integrity contract
 
 - Do not infer treatment groups, sample size, statistics, scale bars, molecular identity, or mechanism from appearance.
@@ -95,3 +119,7 @@ Never combine `scan`, `propose`, `bounds`, `bounds-approve`, `approve`, and `ass
 - Never make pixel edits, selective exclusions, blot crops, or statistical changes.
 
 Read `references/privacy-and-integrity.md` before cloud vision. Read `references/journal-layout.md` when configuring dimensions. Read `references/caption-contract.md` before finalizing legends.
+
+For Western blot multi-panel figures, read `references/wb-layout-reference.md`. Learn its normalized spacing and alignment ratios; do not copy the source artboard dimensions or scientific labels.
+
+For mixed pharmaceutics figures containing schemes, characterization, microscopy matrices, dose-response plots, heatmaps, or in-vivo panels, read `references/adaptive-article-layout.md` before proposing panel spans.

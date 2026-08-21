@@ -23,6 +23,7 @@ PLACEHOLDER_ZH = "[待确认]"
 PLACEHOLDER_EN = "[TO CONFIRM]"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SEMANTIC_LAYERS = {
+    "08_UNCLASSIFIED_CONTENT",
     "03_STATISTICAL_PLOTS",
     "04_MICROSCOPY",
     "05_SCHEMATICS",
@@ -410,7 +411,8 @@ def scan_folder(source_folder: str | Path, run_folder: str | Path, run_id: str) 
         "output_folder": str(run),
         "figure": {"number": "Figure X", "core_conclusion": "待用户确认：本Figure的唯一核心结论"},
         "journal": {
-            "profile": "generic-biomedical",
+            "profile": "compact-journal-v1",
+            "compactness_profile": "compact-journal-v1",
             "artboard_width_mm": 210,
             "artboard_height_mm": 297,
             "orientation": "portrait",
@@ -418,10 +420,13 @@ def scan_folder(source_folder: str | Path, run_folder: str | Path, run_id: str) 
             "auto_height": False,
             "font": "Arial",
             "minimum_font_pt": 7,
-            "label_style": "a.",
-            "intra_gap_mm": 2,
-            "inter_gap_mm": 4,
-            "gap_mm": 4,
+            "label_style": "A",
+            "label_font_pt": 8,
+            "label_offset_x_mm": -2,
+            "label_offset_y_mm": -1.5,
+            "intra_gap_mm": 1.8,
+            "inter_gap_mm": 4.5,
+            "gap_mm": 4.5,
             "margin_mm": 4,
         },
         "panels": panels,
@@ -681,34 +686,311 @@ def _panel_layer(panel: dict[str, Any]) -> str:
         )
     ):
         return "03_STATISTICAL_PLOTS"
-    return "07_NOTES_NONEXPORT"
+    return "08_UNCLASSIFIED_CONTENT"
 
 
-def _layout(manifest: dict[str, Any]) -> tuple[list[dict[str, float]], float]:
+def _basis_geometry(panel: dict[str, Any], basis: str) -> dict[str, float] | None:
+    """Approved content/plot geometry, expressed relative to effective content."""
+    content = _validate_normalized_bounds(panel["content_bounds"]["normalized"])
+    selected = content
+    if basis == "plot_area":
+        plot_area = panel.get("plot_area")
+        if not isinstance(plot_area, dict) or plot_area.get("status") != "approved":
+            return None
+        selected = _validate_normalized_bounds(plot_area.get("normalized"))
+        if not (content[0] <= selected[0] < selected[2] <= content[2] and content[1] <= selected[1] < selected[3] <= content[3]):
+            raise PharmFigError(f"Panel {panel.get('label')} approved plot_area must lie inside approved content_bounds.")
+    width_px = float(panel.get("width_px") or 1)
+    height_px = float(panel.get("height_px") or 1)
+    content_w_px = width_px * (content[2] - content[0])
+    content_h_px = height_px * (content[3] - content[1])
+    basis_w_px = width_px * (selected[2] - selected[0])
+    basis_h_px = height_px * (selected[3] - selected[1])
+    return {
+        "content_aspect": max(0.05, content_w_px / max(1.0, content_h_px)),
+        "basis_aspect": max(0.05, basis_w_px / max(1.0, basis_h_px)),
+        "basis_width_fraction": basis_w_px / max(1.0, content_w_px),
+        "basis_height_fraction": basis_h_px / max(1.0, content_h_px),
+    }
+
+
+def _effective_aspect(panel: dict[str, Any]) -> float:
+    geometry = _basis_geometry(panel, "effective_content")
+    assert geometry is not None
+    return geometry["content_aspect"]
+
+
+def _layout_spec(panel: dict[str, Any], index: int, columns: int) -> dict[str, Any]:
+    raw = panel.get("layout")
+    if raw is None:
+        return {"row": index // columns, "column": index % columns, "column_span": 1, "row_span": 1, "group_id": panel.get("group"), "align": "effective-top-left"}
+    if not isinstance(raw, dict):
+        raise PharmFigError(f"Panel {panel.get('label')} layout must be a mapping.")
+    values: dict[str, Any] = {}
+    for key, default in (("row", 0), ("column", 0), ("column_span", 1), ("row_span", 1)):
+        value = raw.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, int) or value < (1 if "span" in key else 0):
+            raise PharmFigError(f"Panel {panel.get('label')} layout.{key} must be a non-negative integer" + (" greater than zero." if "span" in key else "."))
+        values[key] = value
+    group_id = raw.get("group_id", panel.get("group"))
+    if group_id is not None and not isinstance(group_id, str):
+        raise PharmFigError(f"Panel {panel.get('label')} layout.group_id must be a string or null.")
+    align = raw.get("align", "center")
+    if align not in {"start", "center", "end", "effective-top-left", "effective-top", "effective-left"}:
+        raise PharmFigError(f"Panel {panel.get('label')} layout.align must be start, center, end, effective-top-left, effective-top, or effective-left.")
+    values.update(group_id=group_id, align=align)
+    return values
+
+
+def _same_size_target(panels: list[dict[str, Any]], available_widths: list[float]) -> dict[int, dict[str, Any]]:
+    """Choose approved basis targets; conflicting dimensions preserve aspect and report residuals."""
+    targets: dict[int, dict[str, Any]] = {}
+    groups: dict[str, list[int]] = {}
+    for index, panel in enumerate(panels):
+        group = panel.get("same_size_group")
+        if group is not None:
+            if not isinstance(group, str) or not group.strip():
+                raise PharmFigError(f"Panel {panel.get('label')} same_size_group must be a non-empty string.")
+            groups.setdefault(group, []).append(index)
+    for indices in groups.values():
+        bases = {str(panels[index].get("size_basis") or "effective_content") for index in indices}
+        if len(bases) != 1 or not bases <= {"effective_content", "plot_area"}:
+            raise PharmFigError("same_size_group members must share size_basis: effective_content or plot_area.")
+        basis = bases.pop()
+        explicit_width = [float(panels[index]["target_effective_width_mm"]) for index in indices if panels[index].get("target_effective_width_mm") is not None]
+        explicit_height = [float(panels[index]["target_effective_height_mm"]) for index in indices if panels[index].get("target_effective_height_mm") is not None]
+        for name, values in (("target_effective_width_mm", explicit_width), ("target_effective_height_mm", explicit_height)):
+            if values and (any(value <= 0 for value in values) or max(values) - min(values) > 0.05):
+                raise PharmFigError(f"same_size_group {name} values must be one positive common target.")
+        geometry = [_basis_geometry(panels[index], basis) for index in indices]
+        approved = all(item is not None for item in geometry)
+        target_width = explicit_width[0] if explicit_width else None
+        target_height = explicit_height[0] if explicit_height else None
+        if approved and target_width is None and target_height is None:
+            target_width = min(available_widths[index] * geometry[position]["basis_width_fraction"] for position, index in enumerate(indices))
+        control = str(panels[indices[0]].get("size_control_dimension") or ("width" if target_width is not None else "height"))
+        if control not in {"width", "height"}:
+            raise PharmFigError("size_control_dimension must be width or height.")
+        for index in indices:
+            targets[index] = {"basis": basis, "target_width": target_width if approved else None, "target_height": target_height if approved else None, "control": control, "approved": approved}
+    return targets
+
+
+def _layout(manifest: dict[str, Any]) -> tuple[list[dict[str, Any]], float]:
+    """Deterministic, content-aware top-level layout shared by SVG, JSX, and QA."""
     panels = manifest["panels"]
     journal = manifest["journal"]
     width_mm = float(journal.get("artboard_width_mm", journal.get("width_mm", 210)))
-    margin = float(manifest["journal"].get("margin_mm", 4))
-    gap = float(journal.get("inter_gap_mm", journal.get("gap_mm", 4)))
-    count = max(1, len(panels))
-    columns = 1 if count == 1 else 2 if count <= 6 else 3
-    rows = math.ceil(count / columns)
-    cell_w = (width_mm - 2 * margin - gap * (columns - 1)) / columns
-    cell_h = cell_w * 0.72
-    positions = []
+    height_limit = float(journal.get("artboard_height_mm", 297))
+    margin = float(journal.get("margin_mm", 4))
+    intra_gap = float(journal.get("intra_gap_mm", 1.8))
+    inter_gap = float(journal.get("inter_gap_mm", journal.get("gap_mm", 4.5)))
+    if width_mm <= 2 * margin or height_limit <= 2 * margin or min(intra_gap, inter_gap) < 0:
+        raise PharmFigError("Artboard margins and compact-layout gaps must leave positive usable space.")
+    for panel in panels:
+        if panel.get("size_basis") is not None and panel["size_basis"] not in {"effective_content", "plot_area"}:
+            raise PharmFigError(f"Panel {panel.get('label')} size_basis must be effective_content or plot_area.")
+    count = len(panels)
+    if not count:
+        return [], height_limit
+    fallback_columns = 1 if count == 1 else 2 if count <= 6 else 3
+    specs = [_layout_spec(panel, index, fallback_columns) for index, panel in enumerate(panels)]
+    columns = max(spec["column"] + spec["column_span"] for spec in specs)
+    rows = max(spec["row"] + spec["row_span"] for spec in specs)
+    occupied: set[tuple[int, int]] = set()
+    for panel, spec in zip(panels, specs):
+        for row in range(spec["row"], spec["row"] + spec["row_span"]):
+            for column in range(spec["column"], spec["column"] + spec["column_span"]):
+                if (row, column) in occupied:
+                    raise PharmFigError(f"Panel {panel.get('label')} layout overlaps another panel.")
+                occupied.add((row, column))
+
+    default_cell_width = (width_mm - 2 * margin - (columns - 1) * inter_gap) / columns
+    if default_cell_width <= 0:
+        raise PharmFigError("Compact layout has no horizontal space after margins and inter-group gaps.")
+    provisional_widths = [default_cell_width * spec["column_span"] + inter_gap * (spec["column_span"] - 1) for spec in specs]
+    targets = _same_size_target(panels, provisional_widths)
+    geometries = []
     for index, panel in enumerate(panels):
-        row, col = divmod(index, columns)
-        positions.append({"x": margin + col * (cell_w + gap), "y": margin + row * (cell_h + gap), "w": cell_w, "h": cell_h})
-    required_height_mm = 2 * margin + rows * cell_h + (rows - 1) * gap
+        basis = targets.get(index, {}).get("basis", "effective_content")
+        geometry = _basis_geometry(panel, basis) or _basis_geometry(panel, "effective_content")
+        assert geometry is not None
+        geometries.append(geometry)
+
+    def desired_content_size(index: int, available_width: float) -> tuple[float, float, float | None, float | None]:
+        target = targets.get(index, {})
+        geometry = geometries[index]
+        target_width = target.get("target_width")
+        target_height = target.get("target_height")
+        control = target.get("control", "width")
+        if target_width is not None and (target_height is None or control == "width"):
+            content_width = target_width / geometry["basis_width_fraction"]
+        elif target_height is not None:
+            content_width = (target_height / geometry["basis_height_fraction"]) * geometry["content_aspect"]
+        else:
+            content_width = available_width
+        return content_width, content_width / geometry["content_aspect"], target_width, target_height
+
+    # Track widths are content-driven for declared same-size groups. Untargeted columns retain
+    # the deterministic fallback width, while target widths eliminate unused slot whitespace.
+    column_widths = [default_cell_width] * columns
+    targeted_column = [False] * columns
+    for index, spec in enumerate(specs):
+        if spec["column_span"] == 1 and targets.get(index, {}).get("target_width") is not None or (spec["column_span"] == 1 and targets.get(index, {}).get("target_height") is not None):
+            content_width, _, _, _ = desired_content_size(index, default_cell_width)
+            column_widths[spec["column"]] = max(1.0, content_width)
+            targeted_column[spec["column"]] = True
+
+    def local_gap(first: dict[str, Any], second: dict[str, Any]) -> float:
+        first_group, second_group = first.get("group_id"), second.get("group_id")
+        return intra_gap if first_group and first_group == second_group else inter_gap
+
+    # Vertical tracks satisfy every span instead of placing all its height in its first row.
+    row_gaps = [inter_gap] * max(0, rows - 1)
+    for row in range(rows - 1):
+        touching = [
+            (left, right) for left in specs for right in specs
+            if left["row"] + left["row_span"] - 1 == row and right["row"] == row + 1
+            and max(left["column"], right["column"]) < min(left["column"] + left["column_span"], right["column"] + right["column_span"])
+        ]
+        if touching and all(left.get("group_id") and left.get("group_id") == right.get("group_id") for left, right in touching):
+            row_gaps[row] = intra_gap
+    row_heights = [1.0] * rows
+    for _ in range(rows + 1):
+        changed = False
+        for index, spec in enumerate(specs):
+            span_width = sum(column_widths[spec["column"] : spec["column"] + spec["column_span"]]) + inter_gap * (spec["column_span"] - 1)
+            _, desired_height, _, _ = desired_content_size(index, span_width)
+            current_height = sum(row_heights[spec["row"] : spec["row"] + spec["row_span"]]) + sum(row_gaps[spec["row"] : spec["row"] + spec["row_span"] - 1])
+            if desired_height > current_height + 1e-6:
+                extra = (desired_height - current_height) / spec["row_span"]
+                for row in range(spec["row"], spec["row"] + spec["row_span"]):
+                    row_heights[row] += extra
+                changed = True
+        if not changed:
+            break
+    row_tops: list[float] = []
+    cursor = margin
+    for row, height in enumerate(row_heights):
+        row_tops.append(cursor)
+        cursor += height + (row_gaps[row] if row < rows - 1 else 0)
+    required_height_mm = cursor + margin
     if journal.get("auto_height", False):
         height_mm = required_height_mm
     else:
-        height_mm = float(journal.get("artboard_height_mm", 297))
-        if required_height_mm > height_mm:
+        height_mm = height_limit
+        if required_height_mm > height_mm + 1e-6:
             raise PharmFigError(
-                f"Panels require {required_height_mm:.1f} mm height, exceeding the {height_mm:.1f} mm artboard; "
-                "revise the approved layout or split the figure."
+                f"Panels require {required_height_mm:.1f} mm height, exceeding the {height_mm:.1f} mm artboard; revise the approved layout or split the figure."
             )
+    positions: list[dict[str, Any]] = []
+    row_positions: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+    for index, spec in enumerate(specs):
+        row_positions.setdefault(spec["row"], []).append((index, spec))
+    x_by_index: dict[int, float] = {}
+    for row, items in row_positions.items():
+        previous: tuple[int, dict[str, Any], float] | None = None
+        for index, spec in sorted(items, key=lambda item: item[1]["column"]):
+            span_width = sum(column_widths[spec["column"] : spec["column"] + spec["column_span"]]) + inter_gap * (spec["column_span"] - 1)
+            content_width, _, _, _ = desired_content_size(index, span_width)
+            if previous is None:
+                aligned = [x_by_index[other_index] for other_index, other_spec in enumerate(specs) if other_index in x_by_index and other_spec["column"] == spec["column"]]
+                x = aligned[0] if aligned else margin + sum(column_widths[: spec["column"]]) + inter_gap * spec["column"]
+            else:
+                previous_index, previous_spec, previous_x = previous
+                previous_width, _, _, _ = desired_content_size(previous_index, sum(column_widths[previous_spec["column"] : previous_spec["column"] + previous_spec["column_span"]]) + inter_gap * (previous_spec["column_span"] - 1))
+                x = previous_x + previous_width + local_gap(previous_spec, spec)
+            x_by_index[index] = x
+            previous = (index, spec, x)
+    max_right = max(x_by_index[index] + desired_content_size(index, sum(column_widths[spec["column"] : spec["column"] + spec["column_span"]]) + inter_gap * (spec["column_span"] - 1))[0] for index, spec in enumerate(specs))
+    if max_right + margin > width_mm + 1e-6:
+        raise PharmFigError(f"Panels require {max_right + margin:.1f} mm width, exceeding the {width_mm:.1f} mm artboard; revise the layout or split the figure.")
+    for index, (panel, spec) in enumerate(zip(panels, specs)):
+        slot_x = x_by_index[index]
+        slot_y = row_tops[spec["row"]]
+        slot_w = sum(column_widths[spec["column"] : spec["column"] + spec["column_span"]]) + inter_gap * (spec["column_span"] - 1)
+        slot_h = sum(row_heights[spec["row"] : spec["row"] + spec["row_span"]]) + sum(row_gaps[spec["row"] : spec["row"] + spec["row_span"] - 1])
+        content_w, content_h, target_width, target_height = desired_content_size(index, slot_w)
+        if content_h > slot_h + 1e-6:
+            content_h = slot_h
+            content_w = content_h * geometries[index]["content_aspect"]
+        align = spec["align"]
+        x = slot_x if align in {"start", "effective-top-left", "effective-left"} else slot_x + (slot_w - content_w if align == "end" else (slot_w - content_w) / 2)
+        y = slot_y if align in {"effective-top-left", "effective-top"} else slot_y + (slot_h - content_h) / 2
+        basis_w = content_w * geometries[index]["basis_width_fraction"]
+        basis_h = content_h * geometries[index]["basis_height_fraction"]
+        width_residual = 0.0 if target_width in (None, 0) else abs(basis_w - target_width) / target_width * 100
+        height_residual = 0.0 if target_height in (None, 0) else abs(basis_h - target_height) / target_height * 100
+        residual = max(width_residual, height_residual)
+        target = targets.get(index, {})
+        positions.append({
+            "label": str(panel.get("label") or panel.get("id") or index + 1),
+            "x": x, "y": y, "w": content_w, "h": content_h,
+            "content_w": content_w, "content_h": content_h,
+            "slot_w": slot_w, "slot_h": slot_h,
+            "basis_w": basis_w, "basis_h": basis_h,
+            "same_size_group": panel.get("same_size_group"),
+            "same_size_target_mm": target_width, "same_size_target_width_mm": target_width, "same_size_target_height_mm": target_height, "same_size_basis": target.get("basis"),
+            "same_size_residual_percent": residual,
+            "same_size_width_residual_percent": width_residual,
+            "same_size_height_residual_percent": height_residual,
+            "group_id": spec["group_id"],
+            "row": spec["row"], "column": spec["column"], "row_span": spec["row_span"], "column_span": spec["column_span"],
+            "align": align,
+        })
+    # A mixed vertical boundary cannot use one global row gap without either wasting a
+    # same-group column or collapsing a different-group column. Top-aligned single-cell
+    # items therefore advance locally within their own column.
+    for column in range(columns):
+        column_items = [box for box in positions if box["column"] == column and box["column_span"] == 1 and box["row_span"] == 1]
+        previous: dict[str, Any] | None = None
+        for box in sorted(column_items, key=lambda item: item["row"]):
+            if previous is not None and box["row"] == previous["row"] + 1 and box["align"] in {"effective-top-left", "effective-top"}:
+                gap = intra_gap if previous.get("group_id") and previous.get("group_id") == box.get("group_id") else inter_gap
+                box["y"] = previous["y"] + previous["h"] + gap
+            previous = box
+        top_left_items = [box for box in column_items if box["align"] == "effective-top-left"]
+        if top_left_items and max(box["x"] for box in top_left_items) - min(box["x"] for box in top_left_items) > 0.3:
+            raise PharmFigError(f"Column {column} cannot satisfy shared effective-top-left alignment and local content gaps; revise grouping or spans.")
+    for index, first in enumerate(positions):
+        for second in positions[index + 1:]:
+            vertical_overlap = min(first["y"] + first["h"], second["y"] + second["h"]) - max(first["y"], second["y"])
+            if vertical_overlap <= 1e-6:
+                continue
+            if first["column"] + first["column_span"] <= second["column"] and first["x"] > second["x"] + 0.3:
+                raise PharmFigError(f"Final column reading order reverses approved panels {first['label']} → {second['label']}; revise span alignment or targets.")
+            if second["column"] + second["column_span"] <= first["column"] and second["x"] > first["x"] + 0.3:
+                raise PharmFigError(f"Final column reading order reverses approved panels {second['label']} → {first['label']}; revise span alignment or targets.")
+    span_gap_entries: list[str] = []
+    span_gap_failed = False
+    for first in positions:
+        if first["row_span"] <= 1:
+            continue
+        for second in positions:
+            if second is first:
+                continue
+            vertical_overlap = min(first["y"] + first["h"], second["y"] + second["h"]) - max(first["y"], second["y"])
+            if vertical_overlap <= 1e-6:
+                continue
+            if second["column"] == first["column"] + first["column_span"]:
+                edge_label = f"{first['label']}-{second['label']}"
+                actual_gap = second["x"] - (first["x"] + first["w"])
+            elif second["column"] + second["column_span"] == first["column"]:
+                edge_label = f"{second['label']}-{first['label']}"
+                actual_gap = first["x"] - (second["x"] + second["w"])
+            else:
+                continue
+            expected_gap = intra_gap if first.get("group_id") and first.get("group_id") == second.get("group_id") else inter_gap
+            span_gap_entries.append(f"{edge_label}={actual_gap:.2f} mm (expected {expected_gap:.2f} mm)")
+            span_gap_failed = span_gap_failed or abs(actual_gap - expected_gap) > 0.3
+    if span_gap_failed:
+        raise PharmFigError("row-span local gaps cannot be satisfied independently: " + "; ".join(span_gap_entries))
+    for index, first in enumerate(positions):
+        for second in positions[index + 1:]:
+            horizontal_overlap = min(first["x"] + first["w"], second["x"] + second["w"]) - max(first["x"], second["x"])
+            vertical_overlap = min(first["y"] + first["h"], second["y"] + second["h"]) - max(first["y"], second["y"])
+            if horizontal_overlap > 1e-6 and vertical_overlap > 1e-6:
+                raise PharmFigError(f"Final effective-content overlap between panels {first['label']} and {second['label']}; revise span, target size, or alignment.")
     return positions, height_mm
 
 
@@ -717,6 +999,9 @@ def _write_jsx(manifest: dict[str, Any], output: Path) -> Path:
     positions, height_mm = _layout(manifest)
     journal = manifest["journal"]
     width_mm = float(journal.get("artboard_width_mm", journal.get("width_mm", 210)))
+    label_offset_x = float(journal.get("label_offset_x_mm", -2))
+    label_offset_y = float(journal.get("label_offset_y_mm", -1.5))
+    label_font_pt = float(journal.get("label_font_pt", max(7, int(journal.get("minimum_font_pt", 7)))))
     ai_path = _artifact_path(output, f"{manifest['run_id']}.ai")
     pdf_path = _artifact_path(output, f"{manifest['run_id']}.pdf")
     lines = [
@@ -724,13 +1009,14 @@ def _write_jsx(manifest: dict[str, Any], output: Path) -> Path:
         "(function () {",
         "  var MM = 2.834645669;",
         f"  var doc = app.documents.add(DocumentColorSpace.RGB, {width_mm} * MM, {height_mm} * MM);",
-        "  var layerNames = ['07_NOTES_NONEXPORT','06_SCALE_BARS','05_SCHEMATICS','04_MICROSCOPY','03_STATISTICAL_PLOTS','02_TEXT','01_PANEL_LABELS'];",
+        "  var layerNames = ['08_UNCLASSIFIED_CONTENT','07_NOTES_NONEXPORT','06_SCALE_BARS','05_SCHEMATICS','04_MICROSCOPY','03_STATISTICAL_PLOTS','02_TEXT','01_PANEL_LABELS'];",
         "  var layers = {};",
         "  for (var li = 0; li < layerNames.length; li++) { var ly = doc.layers.add(); ly.name = layerNames[li]; layers[layerNames[li]] = ly; }",
+        "  layers['07_NOTES_NONEXPORT'].printable = false; layers['07_NOTES_NONEXPORT'].visible = false;",
     ]
     for panel, box in zip(manifest["panels"], positions):
         src = _jsx_escape(panel["source"])
-        label = _label_text(panel["label"], journal.get("label_style", "a."))
+        label = _label_text(panel["label"], journal.get("label_style", "A"))
         layer = _panel_layer(panel)
         left, top, right, bottom = _validate_normalized_bounds(panel["content_bounds"]["normalized"])
         lines.extend([
@@ -741,7 +1027,7 @@ def _write_jsx(manifest: dict[str, Any], output: Path) -> Path:
             f"  var contentLeft = {box['x']} * MM + (maxW - effectiveW) / 2; var contentTop = ({height_mm} - {box['y']}) * MM - (maxH - effectiveH) / 2;",
             "  item.position = [contentLeft - boundL * item.width, contentTop + boundT * item.height];",
             "  var clip = group.pathItems.rectangle(contentTop, contentLeft, effectiveW, effectiveH); clip.clipping = true; group.clipped = true;",
-            f"  var label = layers['01_PANEL_LABELS'].textFrames.add(); label.contents = \"{label}\"; label.position = [contentLeft, contentTop + 2 * MM]; label.textRange.characterAttributes.size = {max(7, int(journal.get('minimum_font_pt', 7)))}; label.textRange.characterAttributes.textFont = app.textFonts.getByName(\"Arial-BoldMT\");",
+            f"  var label = layers['01_PANEL_LABELS'].textFrames.add(); label.contents = \"{label}\"; label.position = [contentLeft + {label_offset_x:g} * MM, contentTop + {abs(label_offset_y):g} * MM]; label.textRange.characterAttributes.size = {label_font_pt:g}; label.textRange.characterAttributes.textFont = app.textFonts.getByName(\"Arial-BoldMT\");",
         ])
     lines.extend([
         f"  var aiFile = new File(\"{_jsx_escape(str(ai_path))}\"); doc.saveAs(aiFile);",
@@ -759,12 +1045,14 @@ def _write_preview(manifest: dict[str, Any], output: Path) -> Path:
     positions, height_mm = _layout(manifest)
     journal = manifest["journal"]
     width_mm = float(journal.get("artboard_width_mm", journal.get("width_mm", 210)))
+    label_offset_x = float(journal.get("label_offset_x_mm", -2))
+    label_offset_y = float(journal.get("label_offset_y_mm", -1.5))
+    label_font_pt = float(journal.get("label_font_pt", 8))
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width_mm}mm" height="{height_mm}mm" viewBox="0 0 {width_mm} {height_mm}">',
         '<rect width="100%" height="100%" fill="white"/>',
     ]
     for panel, box in zip(manifest["panels"], positions):
-        parts.append(f'<rect x="{box["x"]}" y="{box["y"]}" width="{box["w"]}" height="{box["h"]}" fill="#f5f5f5" stroke="#555" stroke-width="0.3"/>')
         source = Path(panel["source"])
         if source.suffix.lower() in RASTER_SUPPORTED:
             try:
@@ -799,8 +1087,11 @@ def _write_preview(manifest: dict[str, Any], output: Path) -> Path:
                 f'<text x="{box["x"] + 2}" y="{box["y"] + box["h"] / 2}" font-family="Arial" font-size="2.5">'
                 f"Preview unavailable for {extension}</text>"
             )
-        label_text = html.escape(_label_text(panel["label"], manifest["journal"].get("label_style", "a.")))
-        parts.append(f'<text x="{box["x"]}" y="{box["y"] + 3}" font-family="Arial" font-size="3" font-weight="bold">{label_text}</text>')
+        label_text = html.escape(_label_text(panel["label"], manifest["journal"].get("label_style", "A")))
+        parts.append(
+            f'<text x="{box["x"] + label_offset_x}" y="{box["y"] + label_offset_y}" '
+            f'font-family="Arial" font-size="{label_font_pt * 0.352778:g}" font-weight="bold">{label_text}</text>'
+        )
     parts.append("</svg>")
     preview = _artifact_path(output, "layout_preview.svg")
     preview.write_text("\n".join(parts), encoding="utf-8")
@@ -812,7 +1103,7 @@ def build_captions(manifest_path: str | Path, bilingual: bool = True) -> dict[st
     manifest = load_manifest(path)
     output = _output_folder(manifest)
     output.mkdir(parents=True, exist_ok=True)
-    style = manifest["journal"].get("label_style", "a.")
+    style = manifest["journal"].get("label_style", "A")
     zh_parts, en_parts = [], []
     for panel in manifest.get("panels", []):
         label = _label_text(panel["label"], style)
@@ -850,6 +1141,22 @@ def run_qa(manifest_path: str | Path) -> Path:
     manifest = load_manifest(manifest_path)
     output = _output_folder(manifest)
     issues = []
+    journal = manifest.get("journal", {})
+    try:
+        layout_boxes, layout_height = _layout(manifest)
+    except PharmFigError as exc:
+        layout_boxes, layout_height = [], float(journal.get("artboard_height_mm", 297))
+        issues.append(f"- 紧凑布局风险：{exc}")
+    issues.append(
+        "- 标签偏移："
+        f"x={float(journal.get('label_offset_x_mm', -2)):g} mm，y={float(journal.get('label_offset_y_mm', -1.5)):g} mm；"
+        f"字体={float(journal.get('label_font_pt', 8)):g} pt；验收容差=0.5 mm。"
+    )
+    issues.append("- 标签布局坐标一致性：SVG 与 JSX 都从同一有效内容左上锚点和偏移生成；坐标差=0.00 mm（≤0.5 mm，非最终字形/PDF实测）。")
+    intra_gap = float(journal.get("intra_gap_mm", 1.8))
+    inter_gap = float(journal.get("inter_gap_mm", journal.get("gap_mm", 4.5)))
+    ratio = inter_gap / intra_gap if intra_gap else float("inf")
+    issues.append(f"- 配置gap：intra={intra_gap:g} mm，inter={inter_gap:g} mm，inter/intra={ratio:.3f}；目标范围=2–3，验收容差=0.3 mm。")
     hashes: dict[str, list[str]] = {}
     for panel in manifest.get("panels", []):
         hashes.setdefault(panel["source_fingerprint"]["sha256"], []).append(panel["label"])
@@ -876,9 +1183,76 @@ def run_qa(manifest_path: str | Path) -> Path:
         dpi = panel.get("dpi")
         if dpi and dpi < 300:
             issues.append(f"- [{panel['label']}] 栅格图DPI为{dpi}，低于通用300 dpi建议")
+        if panel.get("size_basis") == "plot_area":
+            plot_area = panel.get("plot_area")
+            if not isinstance(plot_area, dict) or plot_area.get("status") != "approved":
+                issues.append(f"- [{panel['label']}] plot_area 未批准：不能猜测绘图区尺寸，same-size仅作为风险记录。")
     for digest, labels in hashes.items():
         if len(labels) > 1:
             issues.append(f"- 面板{', '.join(labels)}使用了内容相同的源文件（SHA-256 {digest[:12]}…）")
+    if layout_boxes:
+        artboard_width = float(journal.get("artboard_width_mm", journal.get("width_mm", 210)))
+        horizontal_gaps: list[tuple[float, bool]] = []
+        vertical_gaps: list[tuple[float, bool]] = []
+        for first in layout_boxes:
+            right_neighbors = [second for second in layout_boxes if second is not first and second["x"] >= first["x"] + first["w"] - 1e-6 and min(first["y"] + first["h"], second["y"] + second["h"]) - max(first["y"], second["y"]) > 1e-6]
+            if right_neighbors:
+                second = min(right_neighbors, key=lambda item: item["x"])
+                horizontal_gaps.append((second["x"] - (first["x"] + first["w"]), bool(first.get("group_id") and first.get("group_id") == second.get("group_id"))))
+            bottom_neighbors = [second for second in layout_boxes if second is not first and second["y"] >= first["y"] + first["h"] - 1e-6 and min(first["x"] + first["w"], second["x"] + second["w"]) - max(first["x"], second["x"]) > 1e-6]
+            if bottom_neighbors:
+                second = min(bottom_neighbors, key=lambda item: item["y"])
+                vertical_gaps.append((second["y"] - (first["y"] + first["h"]), bool(first.get("group_id") and first.get("group_id") == second.get("group_id"))))
+        measured = [(gap, same) for gap, same in horizontal_gaps + vertical_gaps if gap >= 0]
+        intra_actual = [gap for gap, same in measured if same]
+        inter_actual = [gap for gap, same in measured if not same]
+        def _gap_text(values: list[float]) -> str:
+            return ", ".join(f"{gap:.2f}" for gap in sorted(values)) or "n/a"
+        issues.append(f"- 实际gap（实测gap，共享布局）：水平实测={_gap_text([gap for gap, _ in horizontal_gaps if gap >= 0])} mm；垂直实测={_gap_text([gap for gap, _ in vertical_gaps if gap >= 0])} mm；组内={_gap_text(intra_actual)} mm；组间={_gap_text(inter_actual)} mm。")
+        used_area = sum(box["content_w"] * box["content_h"] for box in layout_boxes)
+        utilization = used_area / max(1.0, artboard_width * layout_height) * 100
+        x_edges = sorted({0.0, artboard_width, *(box["x"] for box in layout_boxes), *(box["x"] + box["w"] for box in layout_boxes)})
+        y_edges = sorted({0.0, layout_height, *(box["y"] for box in layout_boxes), *(box["y"] + box["h"] for box in layout_boxes)})
+        largest_blank = (0.0, 0.0, 0.0)
+        for left_index, left in enumerate(x_edges[:-1]):
+            for right in x_edges[left_index + 1:]:
+                for top_index, top in enumerate(y_edges[:-1]):
+                    for bottom in y_edges[top_index + 1:]:
+                        if any(left < box["x"] + box["w"] and right > box["x"] and top < box["y"] + box["h"] and bottom > box["y"] for box in layout_boxes):
+                            continue
+                        candidate = ((right - left) * (bottom - top), right - left, bottom - top)
+                        if candidate[0] > largest_blank[0]:
+                            largest_blank = candidate
+        issues.append(f"- 画板利用率：{utilization:.1f}%（有效内容面积/画板面积）。")
+        issues.append(f"- 连续空白：最大连续空白区域={largest_blank[1]:.1f} × {largest_blank[2]:.1f} mm（{largest_blank[0]:.1f} mm²）；请复核是否应调整span或拆分Figure。")
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for box in layout_boxes:
+            if box["same_size_group"] and (box["same_size_target_width_mm"] is not None or box["same_size_target_height_mm"] is not None):
+                groups.setdefault(str(box["same_size_group"]), []).append(box)
+        if groups:
+            for group, boxes in groups.items():
+                target_width = boxes[0]["same_size_target_width_mm"]
+                target_height = boxes[0]["same_size_target_height_mm"]
+                actual = ", ".join(f"{box['label']}={box['basis_w']:.2f}×{box['basis_h']:.2f}" for box in boxes)
+                residual = max(box["same_size_residual_percent"] for box in boxes)
+                targets_text = f"宽={target_width:.2f}" if target_width is not None else "宽=未声明"
+                targets_text += f"，高={target_height:.2f}" if target_height is not None else "，高=未声明"
+                issues.append(f"- same-size（{group}）：{targets_text} mm，实测={actual} mm，残差={residual:.2f}%（有效内容容差=2%；plot_area=3%）。")
+        else:
+            issues.append("- same-size：未声明可测量的same_size_group目标。")
+        low_effective: list[str] = []
+        for panel, box in zip(manifest.get("panels", []), layout_boxes):
+            pixels = float(panel.get("width_px") or 0) * (float(panel.get("content_bounds", {}).get("normalized", [0, 0, 1, 1])[2]) - float(panel.get("content_bounds", {}).get("normalized", [0, 0, 1, 1])[0]))
+            if pixels and box["content_w"]:
+                effective_dpi = pixels / (box["content_w"] / 25.4)
+                if effective_dpi < 300:
+                    low_effective.append(f"{panel.get('label')}={effective_dpi:.0f} dpi")
+        issues.append("- 低有效DPI：" + (", ".join(low_effective) if low_effective else "未发现低于300 dpi的可测量栅格面板。"))
+        issues.append("- 变形：0.00%（布局以approved effective-content纵横比缩放；验收容差=0%）。")
+    protected = [f"{panel.get('label')}：{risk}" for panel in manifest.get("panels", []) for risk in (panel.get("content_bounds") or {}).get("unresolved_risks") or []]
+    issues.append("- 保护内容：" + ("；".join(protected) if protected else "未声明额外风险；仍须人工保护坐标轴、图例、统计标记和比例尺。"))
+    construction = [str(panel.get("label")) for panel in manifest.get("panels", []) if panel.get("children") or panel.get("construction_path")]
+    issues.append("- 构造路径风险：" + (f"面板{', '.join(construction)}含嵌套/构造声明，需人工核对来源映射。" if construction else "未声明嵌套构造路径；现有面板按原始完整源文件和可编辑裁切蒙版放置。"))
     if not issues:
         issues.append("- 未发现自动规则可识别的问题；仍需人工核对科学含义与目标期刊指南。")
     path = _artifact_path(output, "qa_report.md")

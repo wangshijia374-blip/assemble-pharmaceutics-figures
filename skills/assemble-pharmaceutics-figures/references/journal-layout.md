@@ -1,5 +1,9 @@
 # Generic biomedical layout profile
 
+## Compact CLI profile
+
+For the default `compact-journal-v1` A4 working layout, use `references/compact-journal-layout.md`. The CLI enforces top-level row/column spans, approved effective-content sizing, uppercase 8 pt labels, and 1.8 mm / 4.5 mm spacing. This profile is a reusable geometry distillation, not a source for scientific content or exact paper coordinates.
+
 Use this only as a starting point; target-journal instructions override it.
 
 | Setting | Default |
@@ -12,9 +16,9 @@ Use this only as a starting point; target-journal instructions override it.
 | Typeface | Arial or compatible sans serif |
 | Minimum final text | 7 pt |
 | Raster preview | 300 dpi minimum |
-| Panel labels | lowercase `a.` by default |
-| `intra_gap_mm` | 2 mm |
-| `inter_gap_mm` | 4 mm |
+| Panel labels | uppercase bold `A` at 8 pt by default (`compact-journal-v1`) |
+| `intra_gap_mm` | 1.8 mm |
+| `inter_gap_mm` | 4.5 mm |
 | Outer margin | 4 mm |
 
 Default working-canvas configuration:

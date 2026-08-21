@@ -10,11 +10,16 @@ Use this table before promising an output. A documented layout principle is not 
 - A4 portrait (`210 × 297 mm`) working artboard by default;
 - proportional placement of the full source behind an editable Illustrator clipping mask;
 - bilingual placeholders for missing scientific facts;
-- top-level source hashes, duplicate-source detection, editable layer routing, and Illustrator attempt status.
+- top-level source hashes, duplicate-source detection, editable layer routing, and Illustrator attempt status;
+- `compact-journal-v1` defaults: uppercase 8 pt labels, -2/-1.5 mm label offsets, 1.8/4.5 mm hierarchical spacing, and A4 overflow rejection;
+- top-level `panel.layout` validation (`row`, `column`, `column_span`, `row_span`, `group_id`, `align`) with deterministic effective-content placement shared by SVG and JSX;
+- top-level `same_size_group` sizing on approved `effective_content` or approved normalized `plot_area`, with width/height target, actual, and residual QA measurements;
+- `plot_area` is never guessed: members without approved normalized plot-area data are explicitly flagged in QA and are not claimed equal;
+- compact QA output for configured vs measured gaps, SVG/JSX label-coordinate agreement, utilization, largest empty region, distortion, effective DPI, protected content, and construction paths.
 
 ## Review-only until implemented
 
-The current generic layout engine does not automatically solve semantic spans, hard neighbor constraints, child content bounds, child `plot_area`, `same_size_group` targets, shared headers, treatment color identity, or achieved-size tolerances.
+The current engine does not automatically solve child content bounds, child-level `plot_area`, shared headers, treatment color identity, hard neighbor constraints beyond declared top-level spans, nested/composite achieved-size tolerances, final exported glyph bounding boxes, or final Illustrator/PDF physical measurement.
 
 When any of these are required:
 

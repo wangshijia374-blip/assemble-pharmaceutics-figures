@@ -95,7 +95,7 @@ Never combine `scan`, `propose`, `bounds`, `bounds-approve`, `approve`, and `ass
 
 - Use an `A4 portrait` artboard (`210 × 297 mm`) for every review layout, Illustrator document, PDF preview, and Figure run by default. Do not switch individual figures to landscape merely to reduce whitespace.
 - Keep the A4 portrait artboard as the stable working canvas across a project. A named journal's final trim/export dimensions may override the export profile, but must not silently change the approved working orientation.
-- Use a hierarchical spacing model: the `intra-group gap` between images belonging to one experimental group must be smaller than the `inter-group gap` between top-level panels. Start from 2 mm and 4 mm, then scale both with the final print size. The generic grid currently enforces only top-level spacing; nested intra-group placement remains review-only.
+- Use a hierarchical spacing model: the `intra-group gap` between images belonging to one experimental group must be smaller than the `inter-group gap` between top-level panels. `compact-journal-v1` defaults to 1.8 mm and 4.5 mm and measures top-level gaps in QA; nested intra-group placement remains review-only.
 - Keep repeated images or charts at comparable visible-content sizes. Match their effective heights or widths; never force identical raster canvases or distort aspect ratios.
 - Put panels or child items of the same scientific or visual type in an explicit `same_size_group`. Compare the approved visible content for images and the approved `plot_area` for statistical plots; never use the source canvas as the equality basis.
 - Record `size_basis`, `target_effective_width_mm`, and/or `target_effective_height_mm` for every `same_size_group`. Preserve aspect ratio. If both target dimensions cannot be met without distortion, use the dimension that controls scientific readability and report the residual mismatch in QA.
@@ -107,7 +107,7 @@ Never combine `scan`, `propose`, `bounds`, `bounds-approve`, `approve`, and `ass
 - A requested relation such as `B → D → E` is a hard spatial constraint. Do not sacrifice it merely to obtain a symmetric grid.
 - The target journal profile overrides generic A4 presentation. If no journal is named, generate a review layout and separately report the closest common single-column, double-column, and full-page export sizes.
 
-These are decision rules, not a claim that the generic grid engine implements every constraint. For semantic spans, child content bounds, `same_size_group`, hard neighbors, or custom internal grids, follow the review-only workflow in `references/implementation-contract.md` and obtain a fresh approval before any custom Illustrator run.
+The CLI enforces top-level explicit semantic spans, approved effective-content sizing, `same_size_group`, and compact QA measurements through `compact-journal-v1`. Read `references/compact-journal-layout.md` before declaring `layout`, `same_size_group`, or `size_basis`. Child-level constraints and unapproved `plot_area` remain review risks; obtain a fresh approval before any custom Illustrator run.
 
 ## Scientific integrity contract
 

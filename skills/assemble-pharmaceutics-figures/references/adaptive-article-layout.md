@@ -1,5 +1,7 @@
 # Adaptive journal-article layout profile
 
+`compact-journal-v1` now enforces the top-level compact realization of these principles: explicit row/column spans, approved effective-content sizing, and measurable `same_size_group` outcomes. Read `compact-journal-layout.md` for manifest syntax and QA tolerances. Do not copy scientific content or exact coordinates from the article used to distill this layout guidance.
+
 Use this profile for mixed pharmaceutics and biomedical figures. It distills reusable layout patterns from a published multi-figure article without copying its scientific content, treatment labels, conclusions, or exact coordinates.
 
 ## Evidence-led structure

@@ -1,5 +1,9 @@
 # Implementation contract
 
+## Vector typography commands
+
+`fonts-inspect` / `fonts-normalize` provide optional Illustrator-backed object inspection, final-width font assessment, and source-preserving AI/PDF derivatives. They are separate from automatic assembly: without `--run-illustrator`, scripts remain pending. Ambiguous roles and noneditable text remain review items. See [vector-typography.md](vector-typography.md) for sizing, role overrides, partial normalization, and visual verification requirements. Do not claim the whole figure is normalized merely because live text sizes passed.
+
 Use this table before promising an output. A documented layout principle is not the same as an automated guarantee.
 
 ## Enforced by the CLI

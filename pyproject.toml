@@ -13,6 +13,7 @@ dependencies = ["Pillow>=10", "PyYAML>=6"]
 test = ["pytest>=8"]
 windows = ["pywin32>=306; platform_system == 'Windows'"]
 vision = ["openai>=1.0"]
+vector = ["pypdf>=5"]
 
 [project.scripts]
 pharmfig = "pharmfig.cli:main"

@@ -111,6 +111,8 @@ The CLI enforces top-level explicit semantic spans, approved effective-content s
 
 ## Scientific integrity contract
 
+Before final layout approval, inspect and, when needed, normalize editable vector text at its final placed size. Read `references/vector-typography.md`: `fonts-inspect` distinguishes live vector text from raster/outlined/linked content; `fonts-normalize` creates a separate derivative using reviewed body/title/panel roles. Preserve relative superscripts and scientific content, render the derivative, and reassess bounds before switching sources. Generated JSX is pending work, not proof of inspection or normalization.
+
 - Do not infer treatment groups, sample size, statistics, scale bars, molecular identity, or mechanism from appearance.
 - Keep unknown caption facts as `[待确认]` and `[TO CONFIRM]`.
 - Keep representative images adjacent to their matching quantification.

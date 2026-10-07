@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+
+from .typography import inspect_fonts, normalize_fonts
 
 from .workflow import (
     ApprovalError,
@@ -57,13 +60,34 @@ def parser() -> argparse.ArgumentParser:
     vision = commands.add_parser("vision", help="Optional per-panel cloud vision after explicit consent")
     vision.add_argument("manifest")
     vision.add_argument("--panels", required=True, help="Comma-separated approved panel labels")
+
+    for name in ("fonts-inspect", "fonts-normalize"):
+        fonts = commands.add_parser(name, help="Inspect live vector text or create a font-normalized derivative")
+        fonts.add_argument("source", help="Source graphic for inspect; font-audit.json for normalize")
+        fonts.add_argument("--output", required=True, help="New review directory (never overwrite sources)")
+        fonts.add_argument("--final-width-mm", type=float, required=True, help="Final placed width of the complete source artboard")
+        fonts.add_argument("--run-illustrator", action="store_true")
+        if name == "fonts-normalize":
+            fonts.add_argument("--profile", help="JSON: body/title/panel sizes in final pt")
+            fonts.add_argument("--roles", help="JSON mapping text-frame IDs to body/title/panel/keep")
     return root
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        if args.command == "scan":
+        if args.command in {"fonts-inspect", "fonts-normalize"}:
+            options = dict(final_width_mm=args.final_width_mm, run_illustrator=args.run_illustrator)
+            if args.command == "fonts-inspect":
+                outputs = inspect_fonts(args.source, args.output, **options)
+            else:
+                for field in ("profile", "roles"):
+                    path = getattr(args, field)
+                    options[field] = json.loads(Path(path).read_text(encoding="utf-8-sig")) if path else None
+                outputs = normalize_fonts(args.source, args.output, **options)
+            for key, value in outputs.items():
+                print(f"{key}: {value}")
+        elif args.command == "scan":
             run = PROJECT_ROOT / "runs" / args.run_id
             result = scan_folder(args.folder, run, args.run_id)
             print(result)
@@ -120,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         return 0
-    except (PharmFigError, ApprovalError) as exc:
+    except (PharmFigError, ApprovalError, ValueError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 

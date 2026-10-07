@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200pt" height="140pt" viewBox="0 0 200 140">
+  <rect width="200" height="140" fill="white"/>
+  <text x="6" y="23" font-family="Arial" font-weight="bold" font-size="22">A</text>
+  <text x="42" y="25" font-family="Arial" font-weight="bold" font-size="20">Synthetic chart</text>
+  <path d="M30 40V110H175" fill="none" stroke="black"/>
+  <path d="M30 100L65 83L105 77L155 49" fill="none" stroke="#397da9"/>
+  <text x="45" y="132" font-family="Arial" font-size="16">Time (h)</text>
+  <text x="36" y="56" font-family="Arial" font-size="16">x<tspan font-size="9" baseline-shift="super">2</tspan></text>
+</svg>
